@@ -105,14 +105,14 @@ module AoC2021
         dirty        = false
         next_counter = Array.new(57_314, 0)
 
-        counter.each_with_index do |state_qty, packed_state|
+        counter.each_with_index.map { |state_qty, packed_state|
           next if state_qty.zero?
 
-          pl_a, pl_b = State.unpack(packed_state)
+          # puts "#{ Ractor.count } ractors running. Starting another."
+          Ractor.new(state_qty, packed_state) do |state_qty, packed_state|
+            pl_a, pl_b = State.unpack(packed_state)
 
-          turn_stats = ALL_ROLLS.map { |p1_roll, p1_qty|
-
-            Ractor.new(p1_roll, p1_qty, pl_a, pl_b, state_qty) do |p1_roll, p1_qty, pl_a, pl_b, state_qty|
+            ALL_ROLLS.map { |p1_roll, p1_qty|
               player1 = pl_a.dup.advance(p1_roll)
               p1_hits = state_qty * p1_qty
               next [p1_hits, 0, []] if player1.score >= WINNING_SCORE
@@ -125,11 +125,13 @@ module AoC2021
                 state_pack = State.pack(player1, player2)
                 [0, [[state_pack, p2_hits]]]
               }.reduce([0, 0, []]) { |acc, stats| [0, acc[1] + stats[0], acc[2] + stats[1]] }
-            end
-
-          }.map { _1.take }.reduce([0, 0, []]) { |acc, stats| [acc[0] + stats[0], acc[1] + stats[1], acc[2] + stats[2]] }
-          wins1      += turn_stats[0]
-          wins2      += turn_stats[1]
+            }.reduce([0, 0, []]) { |acc, stats| [acc[0] + stats[0], acc[1] + stats[1], acc[2] + stats[2]] }
+          end
+        }.compact
+               # .tap { puts "#{ Ractor.count } ractors running." }
+               .map(&:take).each do |turn_stats|
+          wins1 += turn_stats[0]
+          wins2 += turn_stats[1]
           turn_stats[2].each { next_counter[_1[0]] += _1[1] }
           dirty ||= turn_stats[2].length.positive?
         end
