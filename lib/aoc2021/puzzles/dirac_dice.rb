@@ -105,9 +105,7 @@ module AoC2021
         dirty        = false
         next_counter = Array.new(57_314, 0)
 
-        counter.each_with_index.map { |state_qty, packed_state|
-          next if state_qty.zero?
-
+        counter.each_with_index.filter { |sqty, _| sqty.positive? }.map { |state_qty, packed_state|
           # puts "#{ Ractor.count } ractors running. Starting another."
           Ractor.new(state_qty, packed_state) do |state_qty, packed_state|
             pl_a, pl_b = State.unpack(packed_state)
@@ -127,9 +125,7 @@ module AoC2021
               }.reduce([0, 0, []]) { |acc, stats| [0, acc[1] + stats[0], acc[2] + stats[1]] }
             }.reduce([0, 0, []]) { |acc, stats| [acc[0] + stats[0], acc[1] + stats[1], acc[2] + stats[2]] }
           end
-        }.compact
-               # .tap { puts "#{ Ractor.count } ractors running." }
-               .map(&:take).each do |turn_stats|
+        }.map(&:take).each do |turn_stats|
           wins1 += turn_stats[0]
           wins2 += turn_stats[1]
           turn_stats[2].each { next_counter[_1[0]] += _1[1] }
