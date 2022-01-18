@@ -94,46 +94,77 @@ module AoC2021
     # This implementation based directly on the work of Simon Gomizelj (vodik on Github)
     def dirac_to_score(win_score = 21)
       DiracDice.const_set("WINNING_SCORE", win_score)
-      [ALL_ROLLS].each { Ractor.make_shareable _1 }
+
+      wins_server = Ractor.new do
+        wins1 = wins2 = 0
+        loop do
+          msg, data = receive
+          case msg
+            when :p1_wins then wins1 += data
+            when :p2_wins then wins2 += data
+            when :final_score then data.send [wins1, wins2]
+          end
+        end
+      end
+
+      counter_server = Ractor.new do
+        loop do
+          next_counter = Array.new(57_314, 0)
+          dirty        = false
+          loop do
+            msg, data = receive
+            case msg
+              when :state then dirty = next_counter[data[0]] += data[1]
+              when :next_counter then break data.send [next_counter, dirty], move: true
+            end
+          end
+        end
+      end
+
+      DiracDice.const_set("WINS_SERVER", wins_server)
+      DiracDice.const_set("COUNTER_SERVER", counter_server)
+      [ALL_ROLLS, WINS_SERVER, COUNTER_SERVER].each { Ractor.make_shareable _1 }
+
+      ractors = (1..16).map do
+        Ractor.new do
+          loop do
+            state_qty, packed_state = receive
+            pl_a, pl_b              = State.unpack(packed_state)
+
+            ALL_ROLLS.each do |p1_roll, p1_qty|
+              player1 = pl_a.dup.advance(p1_roll)
+              p1_hits = state_qty * p1_qty
+              next WINS_SERVER.send [:p1_wins, p1_hits] if player1.score >= WINNING_SCORE
+
+              ALL_ROLLS.each do |p2_roll, p2_qty|
+                player2 = pl_b.dup.advance(p2_roll)
+                p2_hits = p1_hits * p2_qty
+                next WINS_SERVER.send [:p2_wins, p2_hits] if player2.score >= WINNING_SCORE
+
+                COUNTER_SERVER.send [:state, [State.pack(player1, player2), p2_hits]]
+              end
+            end
+            Ractor.yield nil
+          end
+        end
+      end
+
       counter = Array.new(2_314, 0)
 
       counter[State.pack(*@start_positions.map { Player.new _1 })] = 1
 
-      wins1 = wins2 = 0
-      dirty = true
+      dirty       = true
+      next_ractor = 15
       while dirty
-        dirty        = false
-        next_counter = Array.new(57_314, 0)
-
-        counter.each_with_index.filter { |sqty, _| sqty.positive? }.map { |state_qty, packed_state|
-          # puts "#{ Ractor.count } ractors running. Starting another."
-          Ractor.new(state_qty, packed_state) do |state_qty, packed_state|
-            pl_a, pl_b = State.unpack(packed_state)
-
-            ALL_ROLLS.map { |p1_roll, p1_qty|
-              player1 = pl_a.dup.advance(p1_roll)
-              p1_hits = state_qty * p1_qty
-              next [p1_hits, 0, []] if player1.score >= WINNING_SCORE
-
-              ALL_ROLLS.map { |p2_roll, p2_qty|
-                player2 = pl_b.dup.advance(p2_roll)
-                p2_hits = p1_hits * p2_qty
-                next [p2_hits, []] if player2.score >= WINNING_SCORE
-
-                state_pack = State.pack(player1, player2)
-                [0, [[state_pack, p2_hits]]]
-              }.reduce([0, 0, []]) { |acc, stats| [0, acc[1] + stats[0], acc[2] + stats[1]] }
-            }.reduce([0, 0, []]) { |acc, stats| [acc[0] + stats[0], acc[1] + stats[1], acc[2] + stats[2]] }
-          end
-        }.map(&:take).each do |turn_stats|
-          wins1 += turn_stats[0]
-          wins2 += turn_stats[1]
-          turn_stats[2].each { next_counter[_1[0]] += _1[1] }
-          dirty ||= turn_stats[2].length.positive?
-        end
-        counter = next_counter
+        counter.each_with_index
+               .filter { |state_qty, _| state_qty.positive? }
+               .map { |state_data| ractors[next_ractor = (next_ractor + 1) % 16].send(state_data) }
+               .map(&:take)
+        COUNTER_SERVER.send [:next_counter, Ractor.current]
+        counter, dirty = Ractor.receive
       end
-      [wins1, wins2]
+      WINS_SERVER.send [:final_score, Ractor.current]
+      Ractor.receive
     end
 
     def try_all_starting_positions
