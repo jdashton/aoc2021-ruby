@@ -130,20 +130,23 @@ module AoC2021
           loop do
             state_qty, packed_state = receive
             pl_a, pl_b              = State.unpack(packed_state)
+            wins1                   = wins2 = 0
 
             ALL_ROLLS.each do |p1_roll, p1_qty|
               player1 = pl_a.dup.advance(p1_roll)
               p1_hits = state_qty * p1_qty
-              next WINS_SERVER.send [:p1_wins, p1_hits] if player1.score >= WINNING_SCORE
+              next wins1 += p1_hits if player1.score >= WINNING_SCORE
 
               ALL_ROLLS.each do |p2_roll, p2_qty|
                 player2 = pl_b.dup.advance(p2_roll)
                 p2_hits = p1_hits * p2_qty
-                next WINS_SERVER.send [:p2_wins, p2_hits] if player2.score >= WINNING_SCORE
+                next wins2 += p2_hits if player2.score >= WINNING_SCORE
 
                 COUNTER_SERVER.send [:state, [State.pack(player1, player2), p2_hits]]
               end
             end
+            WINS_SERVER.send [:p1_wins, wins1]
+            WINS_SERVER.send [:p2_wins, wins2]
             Ractor.yield nil
           end
         end
