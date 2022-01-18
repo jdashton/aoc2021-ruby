@@ -93,43 +93,47 @@ module AoC2021
 
     # This implementation based directly on the work of Simon Gomizelj (vodik on Github)
     def dirac_to_score(win_score = 21)
+      DiracDice.const_set("WINNING_SCORE", win_score)
+      [ALL_ROLLS].each { Ractor.make_shareable _1 }
       counter = Array.new(2_314, 0)
 
       counter[State.pack(*@start_positions.map { Player.new _1 })] = 1
 
       wins1 = wins2 = 0
       dirty = true
-      round = moves = 0
       while dirty
         dirty        = false
         next_counter = Array.new(57_314, 0)
-        round        += 1
 
         counter.each_with_index do |state_qty, packed_state|
           next if state_qty.zero?
 
           pl_a, pl_b = State.unpack(packed_state)
 
-          ALL_ROLLS.each do |p1_roll, p1_qty|
-            moves   += 1
-            player1 = pl_a.dup.advance(p1_roll)
-            p1_hits = state_qty * p1_qty
-            next wins1 += p1_hits if player1.score >= win_score
+          turn_stats = ALL_ROLLS.map { |p1_roll, p1_qty|
 
-            ALL_ROLLS.each do |p2_roll, p2_qty|
-              moves   += 1
-              player2 = pl_b.dup.advance(p2_roll)
-              p2_hits = p1_hits * p2_qty
-              next wins2 += p2_hits if player2.score >= win_score
+            Ractor.new(p1_roll, p1_qty, pl_a, pl_b, state_qty) do |p1_roll, p1_qty, pl_a, pl_b, state_qty|
+              player1 = pl_a.dup.advance(p1_roll)
+              p1_hits = state_qty * p1_qty
+              next [p1_hits, 0, []] if player1.score >= WINNING_SCORE
 
-              state_pack = State.pack(player1, player2)
-              puts "#{ next_counter[state_pack].zero? ? "first" : "adding" }: #{ [player1, player2] } (#{ state_pack }) +#{ p2_hits }"
-              dirty = next_counter[state_pack] += p2_hits
+              ALL_ROLLS.map { |p2_roll, p2_qty|
+                player2 = pl_b.dup.advance(p2_roll)
+                p2_hits = p1_hits * p2_qty
+                next [p2_hits, []] if player2.score >= WINNING_SCORE
+
+                state_pack = State.pack(player1, player2)
+                [0, [[state_pack, p2_hits]]]
+              }.reduce([0, 0, []]) { |acc, stats| [0, acc[1] + stats[0], acc[2] + stats[1]] }
             end
-          end
+
+          }.map { _1.take }.reduce([0, 0, []]) { |acc, stats| [acc[0] + stats[0], acc[1] + stats[1], acc[2] + stats[2]] }
+          wins1      += turn_stats[0]
+          wins2      += turn_stats[1]
+          turn_stats[2].each { next_counter[_1[0]] += _1[1] }
+          dirty ||= turn_stats[2].length.positive?
         end
         counter = next_counter
-        puts " ... end of round #{ round }: #{ moves } total moves considered"
       end
       [wins1, wins2]
     end
