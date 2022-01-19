@@ -34,4 +34,10 @@ module AoC2021
     puts "Day 18, part B: #{ snailfish.permutations } is the largest magnitude of any sum of two different snailfish numbers."
     puts
   end
+
+  def self.day21b
+    dirac_dice = File.open("input/day21a.txt") { |file| DiracDice.new file }
+    puts "Day 21, part B: Player 1: #{ (wins = dirac_dice.dirac_to_score)[0] } universes, Player 2: #{ wins[1] } universes"
+    puts
+  end
 end
