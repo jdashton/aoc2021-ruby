@@ -95,7 +95,7 @@ module AoC2021
     def dirac_to_score(win_score = 21)
       DiracDice.const_set("WINNING_SCORE", win_score)
 
-      wins_server = Ractor.new do
+      wins_server = Ractor.new(name: "WINS_SERVER") do
         wins1 = wins2 = 0
         loop do
           msg, data = receive
@@ -107,47 +107,67 @@ module AoC2021
         end
       end
 
-      counter_server = Ractor.new do
+      counter_server = Ractor.new(name: "COUNTER_SERVER") do
         loop do
           next_counter = Array.new(57_314, 0)
           dirty        = false
           loop do
             msg, data = receive
             case msg
-              when :state then dirty = next_counter[data[0]] += data[1]
+              when :state
+                dirty = true
+                data.map { |state, qty| next_counter[state] += qty }
               when :next_counter then break data.send [next_counter, dirty], move: true
             end
           end
         end
       end
 
+      cache = Ractor.new(name: "CACHE") do
+        che = Array.new(57_314)
+        loop do
+          msg, state, obj = Ractor.receive
+          case msg
+            when :cache then che[state] = obj
+            when :read then obj.send che[state]
+          end
+        end
+      end
+
       DiracDice.const_set("WINS_SERVER", wins_server)
       DiracDice.const_set("COUNTER_SERVER", counter_server)
-      [ALL_ROLLS, WINS_SERVER, COUNTER_SERVER].each { Ractor.make_shareable _1 }
+      DiracDice.const_set("CACHE", cache)
+      [ALL_ROLLS, WINS_SERVER, COUNTER_SERVER, CACHE].each { Ractor.make_shareable _1 }
 
-      ractors = (1..16).map do
-        Ractor.new do
+      (1..16).map do |number|
+        Ractor.new(name: "Worker #{ number }") do
           loop do
-            state_qty, packed_state = receive
-            pl_a, pl_b              = State.unpack(packed_state)
-            wins1                   = wins2 = 0
+            state_qty, packed_state = Ractor.main.take
+            CACHE.send [:read, packed_state, Ractor.current]
+            wins1, wins2, next_counter = receive
+            unless wins1
+              pl_a, pl_b   = State.unpack(packed_state)
+              wins1        = wins2 = 0
+              next_counter = []
 
-            ALL_ROLLS.each do |p1_roll, p1_qty|
-              player1 = pl_a.dup.advance(p1_roll)
-              p1_hits = state_qty * p1_qty
-              next wins1 += p1_hits if player1.score >= WINNING_SCORE
+              ALL_ROLLS.each do |p1_roll, p1_hits|
+                player1 = pl_a.dup.advance(p1_roll)
+                next wins1 += p1_hits if player1.score >= WINNING_SCORE
 
-              ALL_ROLLS.each do |p2_roll, p2_qty|
-                player2 = pl_b.dup.advance(p2_roll)
-                p2_hits = p1_hits * p2_qty
-                next wins2 += p2_hits if player2.score >= WINNING_SCORE
+                ALL_ROLLS.each do |p2_roll, p2_qty|
+                  player2 = pl_b.dup.advance(p2_roll)
+                  p2_hits = p1_hits * p2_qty
+                  next wins2 += p2_hits if player2.score >= WINNING_SCORE
 
-                COUNTER_SERVER.send [:state, [State.pack(player1, player2), p2_hits]]
+                  next_counter << [State.pack(player1, player2), p2_hits]
+                end
               end
+              CACHE.send [:cache, packed_state, [wins1, wins2, next_counter]]
             end
-            WINS_SERVER.send [:p1_wins, wins1]
-            WINS_SERVER.send [:p2_wins, wins2]
-            Ractor.yield nil
+            COUNTER_SERVER.send [:state, next_counter.map { |state, hits| [state, hits * state_qty] }]
+            WINS_SERVER.send [:p1_wins, wins1 * state_qty]
+            WINS_SERVER.send [:p2_wins, wins2 * state_qty]
+            Ractor.main.send nil
           end
         end
       end
@@ -156,13 +176,12 @@ module AoC2021
 
       counter[State.pack(*@start_positions.map { Player.new _1 })] = 1
 
-      dirty       = true
-      next_ractor = 15
+      dirty = true
       while dirty
         counter.each_with_index
                .filter { |state_qty, _| state_qty.positive? }
-               .map { |state_data| ractors[next_ractor = (next_ractor + 1) % 16].send(state_data) }
-               .map(&:take)
+               .map { |state_data| Ractor.yield(state_data) }
+               .map { Ractor.receive }
         COUNTER_SERVER.send [:next_counter, Ractor.current]
         counter, dirty = Ractor.receive
       end
